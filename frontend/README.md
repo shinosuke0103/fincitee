@@ -7,7 +7,7 @@
 [![Vite](https://img.shields.io/badge/Vite-7.3-646CFF?logo=vite&logoColor=white)](vite.config.ts)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind%20CSS-4.1-06B6D4?logo=tailwindcss&logoColor=white)](src/index.css)
 [![Framer Motion](https://img.shields.io/badge/Framer%20Motion-13-0055FF)](src/App.tsx)
-[![Status](https://img.shields.io/badge/status-UI%20prototype%20%C2%B7%20mock%20transport-E0490B)](#5-current-status)
+[![Modes](https://img.shields.io/badge/modes-live%20API%20%C2%B7%20demo-E0490B)](#5-live-mode-and-demo-mode)
 
 The product story is in the [root README](../README.md); the API this UI talks to is documented in the [backend README](../backend/README.md). This document covers the interface itself.
 
@@ -19,8 +19,8 @@ The product story is in the [root README](../README.md); the API this UI talks t
 2. [Design language](#2-design-language)
 3. [Architecture](#3-architecture)
 4. [Directory structure](#4-directory-structure)
-5. [Current status](#5-current-status)
-6. [Connecting to the real backend](#6-connecting-to-the-real-backend)
+5. [Live mode and demo mode](#5-live-mode-and-demo-mode)
+6. [The backend adapter](#6-the-backend-adapter)
 7. [Getting started](#7-getting-started)
 8. [Interaction details](#8-interaction-details)
 9. [Roadmap](#9-roadmap)
@@ -33,7 +33,7 @@ Fincite is a single-page app with two primary views and three overlays, all livi
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────┐
-│  TICKER   RELIANCE 2,961 ▲0.42%   TCS 4,120 ▼0.18%   HDFCBANK 1,702 ▲0.07%   …   │
+│  TAPE  CORPUS 6 filings · 2,242 pages · LIVE   RELIANCE AR FY2024-25 476p  TCS … │
 ├────────────────┬─────────────────────────────────────────────────────────────────┤
 │  SIDEBAR       │  CHAT VIEW                                    [ Scope ▾ all 6 ] │
 │                │                                                                 │
@@ -47,11 +47,12 @@ Fincite is a single-page app with two primary views and three overlays, all livi
 │    chats     3 │   ── inside a thread ────────────────────────────────────────   │
 │                │                                                                 │
 │  THREADS  + New│                         you ▸ Compare FY25 vs FY24 net profit   │
-│  · RELIANCE AR │   f  RESEARCH TRAIL  ▾                        4 steps · 3.9s    │
-│  · Capex compa…│      ✓ Query understanding    llm                      590ms    │
-│  · ESG risks   │      ✓ Hybrid retrieval       retrieval               1050ms    │
-│                │      ✓ Rerank                 rerank                   690ms    │
-│                │      ✓ Answer synthesis       llm                               │
+│  · RELIANCE AR │   f  RESEARCH TRAIL  ▾                        5 steps · 6.1s    │
+│  · Capex compa…│      ✓ Agent reasoning        agent                   1210ms    │
+│  · ESG risks   │      ✓ Planning sub-questions llm                      640ms    │
+│                │      ✓ What does the FY25 AR… vector store            2180ms    │
+│                │      ✓ Vector retrieval       vector store             410ms    │
+│                │      ✓ Synthesising answer    llm                     1660ms    │
 │                │   Net profit rose to ₹ 69,621 Crore in FY2025 [1], up from      │
 │                │   ₹ 68,000 Crore in FY2024 [2] …                                │
 │                │   GROUNDED SOURCES · 2                                          │
@@ -68,8 +69,8 @@ Fincite is a single-page app with two primary views and three overlays, all livi
 
 | View | Component | What you can do |
 |---|---|---|
-| **Research chat** | `ChatView` | Start a thread from a suggestion or free text; watch the answer stream with a blinking caret; expand the **research trail** (per-step source, status, duration, detail); click inline `[n]` chips or source cards to open the passage; copy the answer; narrow the thread's **scope** to specific filings. |
-| **Filing library** | `LibraryView` | Drag-and-drop PDFs anywhere on the screen or use the upload drawer; filter by company / symbol / type; see per-document status and pipeline stage; open a document's **detail drawer** (metadata sheet + `parsing → chunking → embedding → indexing` progress); start a thread scoped to that one filing; re-upload a revision. |
+| **Research chat** | `ChatView` | Start a thread from a suggestion or free text; watch the answer stream with a blinking caret; expand the **research trail** (per-step source, status, duration, detail); click inline `[n]` chips or source cards to open the passage; copy the answer; choose the **scope** (which filings the next thread may read) before the first message. |
+| **Filing library** | `LibraryView` | Drag-and-drop PDFs anywhere on the screen or use the upload drawer (with an optional NSE metadata form: company, symbol, financial year, document type); filter by company / symbol / type; see per-document status; open a document's **detail drawer** (metadata sheet incl. page count and size, pipeline state, link to the stored PDF); start a thread scoped to that one filing; re-upload a revision with the same identity. |
 
 ### Overlays
 
@@ -111,7 +112,7 @@ Small details that add up: `.tnum` for tabular numerals everywhere a number can 
 <App>
 └── <StoreProvider>                      src/store.tsx — React context, no external state library
     └── <Shell>
-        ├── <Ticker/>                    market marquee
+        ├── <Ticker/>                    corpus tape: indexed filings, pages, LIVE / DEMO
         ├── <Sidebar/>                   desktop rail  (and as a motion drawer on mobile)
         ├── <main>
         │   ├── mobile top bar
@@ -126,7 +127,7 @@ Small details that add up: `.tnum` for tabular numerals everywhere a number can 
         │       │   └── <Composer/>      auto-grow textarea, send / stop
         │       └── <LibraryView/>
         │           ├── <DocRow/>*       table rows + in-flight upload rows
-        │           ├── <UploadDrawer/>  file picker, progress, sample filing
+        │           ├── <UploadDrawer/>  file picker, metadata form, progress (sample filing in demo mode)
         │           └── <DocDetailDrawer/>
         ├── <SourceDrawer/>              citation inspector
         ├── <Toasts/>
@@ -139,42 +140,44 @@ A single provider exposes a typed `Store` through `useStore()`. It owns:
 
 | Slice | Shape | Behaviour |
 |---|---|---|
-| Navigation | `view`, `mobileNav`, `booted` | `boot()` loads documents + health in parallel; splash waits for both |
-| Documents | `documents`, `uploading[]`, `libraryOpenDocId` | `uploadFiles()` tracks per-file progress; `watchDocument()` polls `getDocument` every 900 ms until `ready`/`failed`, then toasts |
-| Conversations | `conversations`, `activeId`, `active`, `streaming` | `send()` lazily creates a conversation titled from the first question, then subscribes to the stream; `patchConversation()` keeps the list sorted by `updated_at` |
-| Streaming | `cancelStream` ref | `stopStreaming()` cancels the transport subscription and resets state |
+| Navigation | `view`, `mobileNav`, `booted` | `boot()` loads documents, health and remembered threads in parallel; the splash waits for all three |
+| Documents | `documents`, `uploading[]`, `libraryOpenDocId` | `uploadFiles(files, meta)` posts real `File`s with per-file progress and surfaces the server's `detail` on 400/422; `watchDocument()` polls `getDocument` until a document is `ready`/`failed` (only the demo transport ever reports an in-flight state — the API indexes synchronously) |
+| Conversations | `conversations`, `activeId`, `active`, `draftScope`, `streaming` | `send()` lazily creates a conversation (title = first question, scope = `draftScope` or the whole library) and subscribes to the stream; `patchConversation()` keeps the list sorted by `updated_at` |
+| Thread index | `localStorage["fincite.threads"]` | The API has no *list conversations* endpoint, so `{ id, title, created_at }` is remembered locally and **re-hydrated on boot** via `GET /api/conversation/{id}` — history, research trails and citations all come back from the server; ids that 404 are dropped |
+| Streaming | `cancelStream` ref | `stopStreaming()` aborts the request and finalises the partial answer in place |
 | Health | `health { status, latency }` | Probed at boot and every 25 s |
 | Citations | `selectedSource` | `openSource()` / `closeSource()` drive the drawer |
-| Toasts | `toasts[]` | FIFO, max 3, 4.6 s TTL |
+| Toasts | `toasts[]` | FIFO, max 3, 4.6 s TTL, optional action (e.g. *Open library* when you ask before indexing anything) |
 
-All mutations are immutable updates inside `useCallback`s; message streaming patches only the last assistant message in the active conversation.
+All mutations are immutable updates inside `useCallback`s; streaming patches only the last assistant message of the active conversation. `onSubProcess` is an **upsert**, so transports may introduce steps they did not announce up front.
 
 ### 3.3 Transport: `src/lib/api.ts`
 
 The UI never touches `fetch` directly. It calls a tiny `api` facade whose methods mirror the backend contract one-to-one:
 
 ```
-api.health()  ·  api.listDocuments()  ·  api.getDocument(id)  ·  api.uploadDocument(file, onProgress)
-api.createConversation(body)  ·  api.getConversation(id)  ·  api.deleteConversation(id)
+api.health()  ·  api.listDocuments()  ·  api.getDocument(id)  ·  api.uploadDocument(file, meta, onProgress) → { promise, cancel }
+api.createConversation({ title, document_scope })  ·  api.getConversation(id, title)  ·  api.deleteConversation(id)
 api.streamMessage(conversationId, question, handlers) → cancel()
 ```
 
-Two implementations sit behind the facade, selected by the `USE_MOCK` constant:
+Two implementations sit behind the facade, selected at build time by `import.meta.env.VITE_USE_MOCK`:
 
-| | `MockTransport` (default) | `RealTransport` |
+| | `RealTransport` (default) | `MockTransport` (`--mode mock`) |
 |---|---|---|
-| Documents | Seeded corpus; uploads enter a **simulated indexing pipeline** (`parsing 1.5 s → chunking 1.7 s → embedding 1.6 s → indexing 1.3 s`) that the UI polls | `GET /api/document/`, `GET /api/document/{id}`, `XMLHttpRequest` upload with progress |
-| Conversations | In-memory map | `POST` / `GET` / `DELETE /api/conversation` |
-| Streaming | Pattern-matched canned answers; emits sub-process steps with realistic durations, then streams tokens in 1–2 word bursts at 12–38 ms | `EventSource` on `/api/conversation/{id}/message` |
+| Documents | `GET /api/document/`, `GET /api/document/{id}`, `XMLHttpRequest` multipart upload with progress and the metadata form fields | Seeded six-filing corpus; uploads enter a **simulated pipeline** (`parsing → chunking → embedding → indexing`) that the UI polls |
+| Conversations | `POST` / `GET` / `DELETE /api/conversation` | In-memory map |
+| Streaming | `fetch` + `ReadableStream` over `/api/conversation/{id}/message`, cancellable with `AbortController`; snapshots are diffed into handler calls (§6) | Pattern-matched canned answers; sub-process steps with realistic durations, then tokens in 1–2 word bursts at 12–38 ms |
 
 The **streaming handler contract** is the seam between transport and store:
 
 ```ts
 interface StreamHandlers {
   onUserMessage(msg)                       // echo of the user's turn
-  onAssistantCreated(msg)                  // placeholder with planned sub_processes
-  onSubProcess(stepId, patch)              // status / duration / detail updates
-  onToken(token)                           // append to content; status → "streaming"
+  onAssistantCreated(msg)                  // placeholder assistant message
+  onSubProcess(stepId, patch)              // upsert: status / duration / detail
+  onToken(token)                           // append a delta (token transports)
+  onContent(content)                       // replace content (snapshot transports)
   onDone({ content, sources })             // finalise; attach citations
   onError(message)                         // mark failed; toast
 }
@@ -193,19 +196,22 @@ Assistant content is Markdown. `CiteMarkdown` pre-processes `[1]`, `[2]` … int
 ```
 frontend/
 ├── index.html                  # fonts (Fraunces, Space Grotesk, IBM Plex Mono), SVG favicon, meta
-├── vite.config.ts              # @vitejs/plugin-react · @tailwindcss/vite · vite-plugin-singlefile · "@" alias
+├── vite.config.ts              # plugin-react · tailwind · singlefile · /api dev proxy · VITE_USE_MOCK by mode
 ├── tsconfig.json               # strict, bundler resolution, noUnused*, "@/*" paths
 ├── package.json
+├── scripts/adapter-check/      # stub_api.py (protocol stand-in) + drive.mjs (lifecycle assertions)
 └── src/
     ├── main.tsx                # StrictMode root
+    ├── vite-env.d.ts           # typed import.meta.env
     ├── App.tsx                 # Shell + Splash
     ├── store.tsx               # StoreProvider / useStore
     ├── index.css               # Tailwind v4 @theme tokens, grain, caret, scrollbars, md tables
     ├── lib/
-    │   ├── api.ts              # facade · MockTransport · RealTransport · StreamHandlers
-    │   ├── types.ts            # FinDocument, Conversation, ChatMessage, MessageSubProcess, Source …
-    │   ├── format.ts           # DOC_TYPE_LABEL/SHORT, STATUS_LABEL, PIPELINE_STAGES, formatters, uid()
-    │   └── mockData.ts         # (see §5) SEED_DOCUMENTS, ANSWER_BANK, FALLBACK_EXCERPT, SUGGESTIONS, COMPANY_HUE, TICKS
+    │   ├── api.ts              # facade · RealTransport · MockTransport · StreamHandlers
+    │   ├── backend.ts          # wire types + mappers (Document, Conversation, Message, sub-process, citations) · SSE reader
+    │   ├── types.ts            # FinDocument, Conversation, ChatMessage, MessageSubProcess, Source, UploadMeta …
+    │   ├── format.ts           # labels, fiscal-year + size formatters, pipeline stages, symbolHue(), uid()
+    │   └── mockData.ts         # demo corpus: SEED_DOCUMENTS, ANSWER_BANK, FALLBACK_EXCERPT, SUGGESTIONS
     ├── components/
     │   ├── ChatView.tsx        # header + ScopePicker · Hero · message list · composer footer
     │   ├── Composer.tsx        # textarea, shortcuts, send/stop
@@ -215,8 +221,8 @@ frontend/
     │   ├── SourceDrawer.tsx    # citation inspector
     │   ├── LibraryView.tsx     # table, drag-drop, UploadDrawer, DocDetailDrawer
     │   ├── Sidebar.tsx         # nav, threads, health
-    │   ├── Ticker.tsx          # marquee
-    │   ├── Monogram.tsx        # company-coloured initials
+    │   ├── Ticker.tsx          # corpus tape
+    │   ├── Monogram.tsx        # hash-coloured ticker initials
     │   └── Toasts.tsx
     └── utils/cn.ts             # clsx + tailwind-merge
 ```
@@ -225,44 +231,44 @@ frontend/
 
 ---
 
-## 5. Current status
+## 5. Live mode and demo mode
 
-| Capability | State |
-|---|---|
-| Information architecture, visual design, motion, responsive layout (mobile rail, drawers) | ✅ complete |
-| Chat flow: threads, streaming render, research trail, citation chips, source drawer, copy, stop | ✅ complete against the mock transport |
-| Library flow: drag-drop upload, progress, pipeline stages, filter, detail drawer, scoped threads | ✅ complete against the mock transport |
-| Health probe + latency indicator | ✅ |
-| `RealTransport` for the FastAPI backend | 🟡 scaffolded — endpoint paths are right, but the SSE event handling, upload body and a few payload shapes need to be aligned with the backend (checklist in §6) |
-| Type-check / build on a fresh clone | ⚠️ two blockers, both trivial — see below |
+The same bundle runs in two modes; nothing in `components/` knows which one is active.
 
-### Known issues on a fresh clone
+| | Live (default) | Demo (`npm run dev:mock` / `npm run build:mock`) |
+|---|---|---|
+| Data | Your filings, indexed by the FastAPI backend; answers from Gemini over pgvector | Six seeded NSE annual reports and five canned, fully-cited answers |
+| Streaming | Real SSE from `/api/conversation/{id}/message` | Simulated research trail + token stream |
+| Uploads | Real multipart upload → synchronous ingestion → `ready` | Simulated pipeline with stage-by-stage progress |
+| Threads | Persisted server-side, re-hydrated on reload | In-memory for the session |
+| Tape | `CORPUS n filings · pages · LIVE` | `… · DEMO` plus a *sample filing* button in the upload drawer |
 
-1. **`src/lib/mockData.ts` is not committed.** Four modules import it (`api.ts`, `ChatView.tsx`, `Monogram.tsx`, `Ticker.tsx`). It must export:
-   `SEED_DOCUMENTS: FinDocument[]`, `ANSWER_BANK: CannedAnswer[]`, `FALLBACK_EXCERPT: Record<docId, { page, excerpt }>`, `SUGGESTIONS: { question, tags[] }[]`, `COMPANY_HUE: Record<symbol, cssColor> & { DEFAULT }`, `TICKS: { symbol, price, change }[]`, and the `CannedAnswer` type `{ id, patterns: RegExp[], plan: { name, source, duration_ms, detail }[], answer, sources: { doc_id, page, excerpt, score }[] }`.
-2. **`src/lib/types.ts` has an unterminated doc-comment** on line 1 (`/**` with no closing `*/`), which comments out `NSEDocumentType` and `DocumentStatus`. Closing the comment restores both exports.
-
-Until both are fixed, `npm run build` / `tsc --noEmit` fail; nothing else is required to run the mock experience.
+Demo mode exists so the interface can be reviewed — on a laptop, in a design critique, in a deployed static preview — without a Gemini key or a database. It is a build flag, not a code path the live app can fall into.
 
 ---
 
-## 6. Connecting to the real backend
+## 6. The backend adapter
 
-Flip `USE_MOCK = false` in [`src/lib/api.ts`](src/lib/api.ts), set `VITE_API_URL`, and add the Vite origin (`http://localhost:5173`) to the backend's `BACKEND_CORS_ORIGINS`. Then reconcile these contract differences — all of them belong in `RealTransport` / a thin adapter layer, none in components:
+`RealTransport` talks to the FastAPI service exactly as it is; every shape difference between the API and the UI's domain types is absorbed in [`src/lib/backend.ts`](src/lib/backend.ts):
 
-| Concern | UI expects (`types.ts`) | Backend provides ([schema.py](../backend/app/schema.py)) | Adapter work |
-|---|---|---|---|
-| **Create conversation** | `{ title, document_scope?: string[] }` | `{ document_ids: UUID[] }` → `Conversation { id, messages, documents }` | Send `document_ids`; keep `title` client-side (derive from first question) |
-| **Message stream** | Named SSE events `sub_process` / `delta` / `done`; query param `q` | Unnamed `message` events, each a **full `Message` snapshot**; query param `user_message`; terminal event has `status ∈ {SUCCESS, ERROR}` | Use `es.onmessage`; diff `content` against the previous snapshot to produce `onToken`; map `sub_processes` by index/`event` to `onSubProcess`; call `onDone` when `status !== "PENDING"` |
-| **Sub-process shape** | `{ id, name, source: llm\|retrieval\|rerank\|parser, status: pending\|running\|completed\|failed, duration_ms?, detail? }` | `{ source: <CBEventType name>, status: PENDING\|FINISHED, metadata_map? }` | Map `source` (`retrieve`→`retrieval`, `llm`/`agent_step`/`synthesize`→`llm`, `reranking`→`rerank`), derive `name`/`detail` (e.g. the sub-question text), compute `duration_ms` from timestamps |
-| **Citations** | `message.sources: Source[] { index, document_id, page, excerpt, score }` | `sub_processes[].metadata_map.sub_question.citations[] { document_id, page_number, text, score }` | Flatten and number citations; the answer text may not contain `[n]` markers — render source cards regardless |
-| **Document shape** | `{ filename, status, progress, uploaded_at, metadata: { company_name, nse_symbol, document_type, fiscal_year, period, pages, file_size, language } }` | `{ url, metadata_map: { nse_document: { company_name, company_symbol, document_type, financial_year, exchange, original_filename }, content_hash, original_filename }, created_at }`; upload is **synchronous** and returns `status: "indexed"` | Map fields; treat every listed document as `ready`; pipeline polling becomes a no-op (or optimistic) until background indexing exists |
-| **Document types** | `annual_report · quarterly_results · concall_transcript · investor_presentation · shareholding_pattern · corporate_announcement` | `annual_report · financial_results · corporate_filing · investor_presentation · other` | Map or extend the backend enum |
-| **Upload body** | — | multipart `file` + optional `company_name`, `company_symbol`, `financial_year`, `document_type`, `exchange` | Use `formData.append("file", file)` (the current `Object.assign(new FormData(), { file })` does not add a form field) and forward metadata from the upload drawer |
-| **Health** | `status: healthy \| degraded \| down` | `{ status: "alive" }` | Map `alive → healthy`; network failure → `down` |
-| **Delete document** | not in UI | not in API | — |
+| Concern | API ([schema.py](../backend/app/schema.py)) | What the adapter does |
+|---|---|---|
+| **Create conversation** | `POST { document_ids: UUID[] }` → `{ id, messages, documents }` | Sends the scope as `document_ids` (an empty UI scope means *every ready document*, because the engine builds one retrieval tool per scoped filing); the title stays client-side |
+| **Message stream** | Unnamed SSE events, each a **full `Message` snapshot**; `status ∈ PENDING · SUCCESS · ERROR`; `: ping` comments every 15 s; `\r\n\r\n` framing | `readSse()` parses the stream from a `fetch` body (no `EventSource`, which would auto-reconnect and *re-send the question*); consecutive snapshots are diffed into `onContent`, `onSubProcess` and finally `onDone` / `onError` |
+| **Sub-processes** | `{ source: <CBEventType>, status: PENDING · FINISHED, metadata_map? }`, `id: null` while streaming | Keyed by stream index; `source` mapped to a UI category and a human name (`agent_step → Agent reasoning`, `sub_question → the question text`, `retrieve → Vector retrieval`, `synthesize → Synthesising answer`); noisy internals (`llm`, `templating`, `embedding`, `query`, `tree`) hidden; `duration_ms` measured client-side |
+| **Citations** | `sub_processes[].metadata_map.sub_question.citations[] { document_id, page_number, text, score }` | Flattened across sub-questions, de-duplicated by `(document, page, text)`, ranked by score and numbered — so source cards render even when the answer prose carries no `[n]` markers |
+| **Documents** | `{ url, metadata_map: { nse_document {…}, content_hash, original_filename, page_count, file_size }, created_at }` | Mapped to `FinDocument`; every listed document is `ready`; `financial_year "2025"` → `FY2024-25`; missing symbol → initials of the company name |
+| **Timestamps** | Naive UTC without a zone suffix; rows arrive unordered | `Z` appended before parsing; messages and sub-processes sorted on the raw microsecond string with a user-before-assistant tie-break |
+| **Upload** | multipart `file` + optional `company_name · company_symbol · financial_year · document_type · exchange`; `400` / `422` with `detail` | `FormData` built from the drawer's metadata form; progress from `xhr.upload`; `detail` shown verbatim in the toast and the upload row |
+| **Health** | `{ status: "alive" }` | `alive → healthy`; network failure → `down` |
+| **Empty library** | `GET /api/document/` returns **404** when there are no rows | Treated as `[]` |
 
-The backend's SSE protocol is specified in detail in [backend/README.md § 5](../backend/README.md#5-streaming-protocol-sse).
+Everything above is pinned down by a **protocol-level check** that lives in the repo. [`scripts/adapter-check/stub_api.py`](scripts/adapter-check/stub_api.py) is a stand-in server that reproduces the backend's exact framing, naive timestamps, `null` ids, 404-on-empty and unordered history; [`scripts/adapter-check/drive.mjs`](scripts/adapter-check/drive.mjs) bundles the real `api.ts` with esbuild and walks the whole lifecycle — health → list → upload → create → stream → re-hydrate → delete — with twenty assertions:
+
+```bash
+cd backend  && uv run python ../frontend/scripts/adapter-check/stub_api.py   # terminal 1
+cd frontend && npm run check:adapter                                          # terminal 2
+```
 
 ---
 
@@ -270,18 +276,23 @@ The backend's SSE protocol is specified in detail in [backend/README.md § 5](..
 
 ```bash
 cd frontend
-npm install            # or: npm ci
-npm run dev            # http://localhost:5173  (mock transport)
+npm ci
+npm run dev            # http://localhost:5173 — live mode, /api proxied to the backend
+npm run dev:mock       # same UI on the seeded demo corpus, no backend needed
+npm run typecheck      # tsc --noEmit (strict, noUnused*)
 npm run build          # single-file bundle → dist/index.html
-npm run preview        # serve the production build locally
-npx tsc --noEmit       # type-check
+npm run build:mock     # a self-contained demo build you can host anywhere
+npm run preview        # serve the production build locally (proxy included)
+npm run check:adapter  # protocol check of the live transport against scripts/adapter-check/stub_api.py
 ```
 
-| Env var | Default | Purpose |
+| Variable | Default | Purpose |
 |---|---|---|
-| `VITE_API_URL` | `http://localhost:8000` | Backend origin used by `RealTransport` |
+| `VITE_PROXY_TARGET` | `http://localhost:8000` | Where the dev / preview server forwards `/api/*` |
+| `VITE_API_URL` | *(empty → same origin)* | Set only when the built file is served from a different origin than the API; add that origin to the backend's `BACKEND_CORS_ORIGINS` |
+| `VITE_USE_MOCK` | `false` (`true` under `--mode mock`) | Selects the transport at build time |
 
-Node 20+ is recommended (Vite 7).
+Node 20+ is recommended (Vite 7). Because `dist/index.html` is a single static file, the simplest deployment is to serve it next to the API under one origin — no CORS, no environment variables.
 
 ---
 
@@ -291,25 +302,25 @@ Node 20+ is recommended (Vite 7).
 |---|---|
 | `Enter` / `Shift+Enter` | Send / newline in the composer; the textarea auto-grows to 168 px |
 | `⌘K` / `Ctrl+K` | Focus the composer from anywhere |
-| Stop button | Appears while streaming; cancels the subscription and leaves partial content in place |
+| Stop button | Appears while streaming; aborts the request and keeps whatever was already answered |
 | Auto-scroll | Sticks to the bottom while streaming unless you have scrolled more than 260 px up |
 | Research trail | Expanded while working; auto-collapses 1.4 s after the last step completes; click to toggle |
 | Citation chip `[n]` / source card | Opens the source drawer; "Open filing in library" jumps to that document's detail drawer |
-| Scope picker | Empty selection = whole corpus; selecting filings narrows retrieval for *this thread only*; disabled while streaming |
+| Scope picker | Editable before a thread exists (empty = whole library); once the first message is sent the scope is fixed server-side and the picker becomes a read-only view of what the thread reads from |
 | Drag-and-drop | Anywhere on the library view; depth-counted so nested elements don't flicker the overlay |
 | Delete thread | Two-step inline confirmation in the sidebar |
 | Health dot | Green pulsing = healthy, amber = degraded, red = unreachable; latency shown in ms |
+| Tape | One cell per filing in the corpus; animates only when there are more than six |
+| Upload errors | Server `detail` (not a PDF, duplicate, indexing failure) shown inline on the upload row and as a toast |
 | Mobile | Sidebar becomes a slide-in rail; table columns collapse below `lg`; drawers go full-width |
 
 ---
 
 ## 9. Roadmap
 
-- [ ] Commit `mockData.ts` and close the comment in `types.ts` so a fresh clone builds.
-- [ ] Implement the `RealTransport` adapter per §6 and switch `USE_MOCK` by environment (`import.meta.env.VITE_USE_MOCK`).
-- [ ] Persist thread list across reloads (hydrate from `GET /api/conversation/{id}` for known ids, or add a list endpoint).
-- [ ] Upload drawer fields for NSE metadata (company, symbol, FY, type) mapped to the backend form.
-- [ ] In-app PDF viewer in the source drawer, scrolled to the cited page.
-- [ ] Virtualised message list and library table for large corpora.
-- [ ] Component tests (Vitest + Testing Library) for `CiteMarkdown`, `ResearchTrail`, the store's streaming reducer.
+- [ ] In-app PDF viewer in the source drawer, scrolled to the cited page (the stored PDF URL is already on every document).
+- [ ] Background ingestion with progress events once the API indexes asynchronously — the polling path and pipeline UI are in place.
+- [ ] A *list conversations* endpoint so threads follow the user across devices instead of living in `localStorage`.
+- [ ] Virtualised message list and library table for very large corpora.
+- [ ] Component tests (Vitest + Testing Library) for `CiteMarkdown`, `ResearchTrail` and the store's streaming reducer, on top of the existing protocol-level adapter check.
 - [ ] Accessibility pass: focus trapping in drawers, `aria-live` for streaming, reduced-motion variants.

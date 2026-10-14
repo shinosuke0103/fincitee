@@ -7,6 +7,7 @@ Provides:
     GET  /{document_id} — Get a single document
 """
 import hashlib
+import io
 import logging
 import uuid as uuid_module
 from typing import List, Optional
@@ -27,6 +28,20 @@ logger = logging.getLogger(__name__)
 
 _ALLOWED_CONTENT_TYPES = {"application/pdf"}
 _PDF_MAGIC_BYTES = b"%PDF"
+
+
+def _count_pdf_pages(content: bytes) -> Optional[int]:
+    """
+    Best-effort page count so the UI can show document size without
+    re-opening the PDF. Returns None if the file cannot be parsed here;
+    ingestion will surface a proper error in that case.
+    """
+    try:
+        from pypdf import PdfReader  # already a runtime dependency (LlamaIndex PDFReader)
+
+        return len(PdfReader(io.BytesIO(content)).pages)
+    except Exception:  # pylint: disable=broad-exception-caught  (metadata only, never fatal)
+        return None
 
 
 def _validate_pdf(file: UploadFile, content: bytes) -> None:
@@ -144,6 +159,8 @@ async def upload_document_endpoint(
             schema.DocumentMetadataKeysEnum.NSE_DOCUMENT: nse_metadata.model_dump(mode="json"),
             "content_hash": content_hash,
             "original_filename": original_filename,
+            "file_size": len(content),
+            "page_count": _count_pdf_pages(content),
         },
     )
     try:

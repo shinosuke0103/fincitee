@@ -1,4 +1,4 @@
-import { COMPANY_HUE } from "../lib/mockData";
+import { symbolHue } from "../lib/format";
 
 export default function Monogram({
   symbol,
@@ -9,19 +9,19 @@ export default function Monogram({
   size?: number;
   className?: string;
 }) {
-  const hue = COMPANY_HUE[symbol] ?? COMPANY_HUE.DEFAULT;
+  const label = (symbol || "?").slice(0, 2).toUpperCase();
   return (
     <span
       className={`flex shrink-0 select-none items-center justify-center font-display font-semibold text-paper ${className}`}
       style={{
         width: size,
         height: size,
-        background: hue,
+        background: symbolHue(symbol || "?"),
         fontSize: Math.max(10, size * 0.34),
         letterSpacing: "0.02em",
       }}
     >
-      {symbol.slice(0, 2)}
+      {label}
     </span>
   );
 }

@@ -30,7 +30,7 @@ This service owns everything behind the `/api` prefix: document ingestion, vecto
 12. [Scripts](#12-scripts)
 13. [Testing](#13-testing)
 14. [Operational notes](#14-operational-notes)
-15. [Known limitations & next steps](#15-known-limitations--next-steps)
+15. [Roadmap](#15-roadmap)
 
 ---
 
@@ -432,7 +432,9 @@ curl -X POST http://localhost:8000/api/document/upload \
       "original_filename": "reliance-annual-report-2025.pdf"
     },
     "content_hash": "9c1d…",
-    "original_filename": "reliance-annual-report-2025.pdf"
+    "original_filename": "reliance-annual-report-2025.pdf",
+    "file_size": 18422911,
+    "page_count": 412
   },
   "status": "indexed",
   "created_at": "2026-10-14T10:12:03.412Z",
@@ -456,7 +458,9 @@ curl "http://localhost:8000/api/document/"                               # all
 curl "http://localhost:8000/api/document/?document_ids=<uuid>&document_ids=<uuid>"
 curl "http://localhost:8000/api/document/<uuid>"
 ```
-Returns `Document[]` / `Document` (`id`, `url`, `metadata_map`, timestamps). `404` when nothing matches.
+Returns `Document[]` / `Document` (`id`, `url`, `metadata_map`, timestamps). `404` when nothing matches — including an empty library, which clients should treat as "no documents yet".
+
+`metadata_map` carries the NSE metadata plus `content_hash` (SHA-256, used for de-duplication), `file_size` in bytes and a best-effort `page_count` read with `pypdf` at upload time (`null` only if the PDF could not be opened for counting).
 </details>
 
 ### Conversations
@@ -590,13 +594,11 @@ Supabase one-time setup: create the Storage bucket named in `SUPABASE_STORAGE_BU
 ```bash
 cd backend
 cp .env.example .env           # Supabase Storage + Gemini creds still come from here
-docker compose up --build      # backend :8000 + local pgvector (DATABASE_URL overridden in compose)
+docker compose up --build      # backend :8000 + local pgvector on host port 5433 (DATABASE_URL overridden in compose)
 docker compose exec fincite-backend .venv/bin/alembic upgrade head   # first run only
 ```
 
-The image installs dependencies from `uv.lock` in a cached layer, pre-downloads NLTK data, then copies the source — code changes don't invalidate the dependency layer.
-
-> The compose file bind-mounts `./` into `/app` for live reload (`LOG_LEVEL=DEBUG`). That mount also shadows the image's `/app/.venv`, so either run `uv sync` on the host first (Linux) or remove the `volumes:` entry for a fully self-contained container.
+The image installs dependencies from `uv.lock` in a cached layer, pre-downloads NLTK data, then copies the source — code changes don't invalidate the dependency layer. The compose file bind-mounts `./` into `/app` for live reload and pins an anonymous volume on `/app/.venv`, so the container always runs the image's own environment regardless of what is on the host. `BACKEND_CORS_ORIGINS` in compose already includes the Vite dev (`5173`) and preview (`4173`) origins.
 
 ### 11.3 Smoke test
 
@@ -619,7 +621,7 @@ curl -N "localhost:8000/api/conversation/<cid>/message?user_message=Summarise%20
 | `scripts/dedupe_vector_store.py` | Finds duplicate chunks (same `text`, `page_label`, `db_document_id`) in `data_pg_vector_store`; `--dry_run` to preview, confirms before deleting. |
 | `scripts/upsert_document.py` | Upserts a `document` row by URL with empty metadata (legacy helper for externally hosted PDFs). |
 
-> The last three use [`fire`](https://github.com/google/python-fire) for their CLI, which is **not** in `pyproject.toml` — run them with `uv run --with fire python scripts/<name>.py …`.
+> The last three use [`fire`](https://github.com/google/python-fire) for their CLI (a `dev` dependency): `uv run python scripts/<name>.py --help`.
 
 ---
 
@@ -627,18 +629,20 @@ curl -N "localhost:8000/api/conversation/<cid>/message?user_message=Summarise%20
 
 ```bash
 cd backend
-uv run pytest -q           # 15 passed in ~6 s
+uv run pytest -q           # 15 passed in ~3 s
 uv run pytest -v tests/app/chat/test_engine.py
 ```
 
 | File | Coverage |
 |---|---|
 | `tests/app/chat/test_engine.py` | `get_chat_history` — ordering, consecutive same-role turns, empty input, `ERROR` filtering (user and assistant), whitespace stripping, unpaired trailing user message; `get_vector_store_singleton` — asserts `embed_dim == 3072` |
-| `tests/app/test_refactored.py` | `NSEDocumentMetadata` parsing & defaults; Supabase storage helpers (client singleton, upload/download/delete paths); `ingest_document` flow (download → parse → index → `set_index_id`); upload endpoint happy path and non-PDF rejection; health endpoint |
+| `tests/app/test_refactored.py` | `NSEDocumentMetadata` parsing & defaults; Supabase storage helpers (client singleton, upload/download/delete paths); `ingest_document` flow (download → parse → index → `set_index_id`); upload endpoint happy path (incl. `file_size` / best-effort `page_count` in the stored metadata) and non-PDF rejection; health endpoint |
 
 Tests are **hermetic**: `conftest.py` seeds `DATABASE_URL`, `GOOGLE_API_KEY` and `SUPABASE_*` with dummy values before any app module is imported, and external calls are patched with `unittest.mock`. No Postgres, no network.
 
 Linting: `uv run pylint app`.
+
+The frontend ships a complementary check: `frontend/scripts/adapter-check/stub_api.py` is a dependency-free stand-in that mirrors this API's wire behaviour (flat upload body, 404 on an empty list, naive timestamps, SSE snapshots with `null` sub-process ids), and `npm run check:adapter` drives the UI's transport against it. If you change a response shape here, update the stub and the check will tell you what the UI needs.
 
 ---
 
@@ -654,14 +658,13 @@ Linting: `uv run pylint app`.
 
 ---
 
-## 15. Known limitations & next steps
+## 15. Roadmap
 
-| Limitation | Planned direction |
+| Direction | Notes |
 |---|---|
-| Upload indexes synchronously; a 400-page filing can take a while and ties up a worker | Background job + progress events on the document (the frontend already models `parsing → chunking → embedding → indexing`) |
-| Dense retrieval only | Hybrid BM25 + dense fusion, cross-encoder rerank stage, exposed as `RERANKING` sub-process (enum value already migrated) |
-| No authentication or tenancy | Supabase Auth JWT verification, per-user documents and conversations |
-| `document.url` relies on a public bucket | Signed URLs with short TTL from `get_document_url` |
-| Gemini SDK (`google-generativeai`) is deprecated upstream | Migrate adapters to `google-genai` when LlamaIndex integrations land |
-| No eval suite | Golden Q&A set over public NSE filings; faithfulness / citation-precision metrics in CI |
-| CLI scripts depend on undeclared `fire` | Add to the `dev` dependency group |
+| Background ingestion with progress events | Today upload indexes synchronously inside the request, which keeps the contract simple (`201` ⇒ queryable) but ties up a worker for very large filings. The frontend already models `parsing → chunking → embedding → indexing`, so the change is server-side only. |
+| Hybrid retrieval + reranking | BM25 + dense fusion with a cross-encoder stage, surfaced as the `RERANKING` sub-process (the enum value is already migrated and rendered by the UI). |
+| Authentication & tenancy | Supabase Auth JWT verification; per-user documents and conversations; a *list conversations* endpoint so clients no longer need to remember thread ids. |
+| Signed storage URLs | Short-TTL signed URLs from `get_document_url` instead of a public bucket. |
+| `google-genai` migration | The `google-generativeai` SDK is deprecated upstream; move the adapters when the LlamaIndex integrations land. |
+| Evaluation suite | Golden Q&A set over public NSE filings; faithfulness and citation-precision metrics in CI. |

@@ -14,12 +14,15 @@ import {
   X,
 } from "lucide-react";
 import { useStore } from "../store";
-import type { FinDocument } from "../lib/types";
+import { USE_MOCK } from "../lib/api";
+import type { FinDocument, NSEDocumentType, UploadMeta } from "../lib/types";
 import {
   DOC_TYPE_LABEL,
   DOC_TYPE_SHORT,
   PIPELINE_STAGES,
   STATUS_LABEL,
+  UPLOADABLE_DOC_TYPES,
+  fiscalYearToWire,
   formatFileSize,
   shortDate,
 } from "../lib/format";
@@ -36,11 +39,9 @@ export default function LibraryView() {
     e.preventDefault();
     dragDepth.current = 0;
     setDragging(false);
-    const files = Array.from(e.dataTransfer.files ?? []).map((f) => ({
-      name: f.name,
-      size: f.size,
-      type: f.type,
-    }));
+    const files = Array.from(e.dataTransfer.files ?? []).filter(
+      (f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")
+    );
     if (files.length) void uploadFiles(files);
   };
 
@@ -317,22 +318,37 @@ function StatusPill({ doc, processing }: { doc: FinDocument; processing: boolean
 function UploadDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { uploadFiles, uploading } = useStore();
   const inputRef = useRef<HTMLInputElement>(null);
+  const [meta, setMeta] = useState<UploadMeta>({});
+  const [showMeta, setShowMeta] = useState(false);
+
+  const cleanMeta = (): UploadMeta => {
+    const out: UploadMeta = {};
+    if (meta.company_name?.trim()) out.company_name = meta.company_name.trim();
+    if (meta.company_symbol?.trim()) out.company_symbol = meta.company_symbol.trim().toUpperCase();
+    if (meta.financial_year?.trim()) out.financial_year = meta.financial_year.trim();
+    if (meta.document_type) out.document_type = meta.document_type;
+    return out;
+  };
 
   const pick = (files: FileList | null) => {
     if (!files?.length) return;
-    void uploadFiles(
-      Array.from(files).map((f) => ({ name: f.name, size: f.size, type: f.type }))
-    );
+    void uploadFiles(Array.from(files), cleanMeta());
   };
 
   const sample = () =>
-    void uploadFiles([
-      {
-        name: "bajaj-finance-q2-fy25-investor-presentation.pdf",
-        size: 4_160_000,
-        type: "application/pdf",
-      },
-    ]);
+    void uploadFiles(
+      [
+        {
+          name: "bajaj-finance-q2-fy25-investor-presentation.pdf",
+          size: 4_160_000,
+          type: "application/pdf",
+        },
+      ],
+      { company_name: "Bajaj Finance", company_symbol: "BAJFINANCE", document_type: "investor_presentation", financial_year: "2025" }
+    );
+
+  const field =
+    "w-full border border-line bg-paper px-2.5 py-2 text-[12.5px] text-ink outline-none placeholder:text-moss/50 focus:border-ink";
 
   return (
     <AnimatePresence>
@@ -354,7 +370,7 @@ function UploadDrawer({ open, onClose }: { open: boolean; onClose: () => void })
           >
             <div className="flex h-12 shrink-0 items-center border-b border-line px-4">
               <span className="font-mono text-[9.5px] uppercase tracking-[0.2em] text-moss">
-                Upload filing
+                POST /api/document/upload
               </span>
               <button
                 type="button"
@@ -394,6 +410,90 @@ function UploadDrawer({ open, onClose }: { open: boolean; onClose: () => void })
                 </span>
               </button>
 
+              {/* optional metadata — mirrors the multipart form fields */}
+              <div className="mt-4 border border-line">
+                <button
+                  type="button"
+                  onClick={() => setShowMeta((v) => !v)}
+                  className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left"
+                >
+                  <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-moss">
+                    Filing metadata
+                  </span>
+                  <span className="font-mono text-[9px] text-moss/60">optional</span>
+                  <ChevronRight
+                    size={12}
+                    className={`ml-auto text-moss transition-transform ${showMeta ? "rotate-90" : ""}`}
+                  />
+                </button>
+                <AnimatePresence initial={false}>
+                  {showMeta && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.18 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="grid grid-cols-2 gap-2 border-t border-line bg-faint/50 px-3.5 py-3">
+                        <label className="col-span-2 block">
+                          <span className="mb-1 block font-mono text-[9px] text-moss">company_name</span>
+                          <input
+                            className={field}
+                            placeholder="Reliance Industries Ltd"
+                            value={meta.company_name ?? ""}
+                            onChange={(e) => setMeta({ ...meta, company_name: e.target.value })}
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block font-mono text-[9px] text-moss">company_symbol</span>
+                          <input
+                            className={`${field} font-mono uppercase`}
+                            placeholder="RELIANCE"
+                            value={meta.company_symbol ?? ""}
+                            onChange={(e) => setMeta({ ...meta, company_symbol: e.target.value })}
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block font-mono text-[9px] text-moss">financial_year</span>
+                          <input
+                            className={`${field} tnum font-mono`}
+                            placeholder="2025"
+                            inputMode="numeric"
+                            value={meta.financial_year ?? ""}
+                            onChange={(e) => setMeta({ ...meta, financial_year: e.target.value })}
+                          />
+                        </label>
+                        <label className="col-span-2 block">
+                          <span className="mb-1 block font-mono text-[9px] text-moss">document_type</span>
+                          <select
+                            className={field}
+                            value={meta.document_type ?? ""}
+                            onChange={(e) =>
+                              setMeta({
+                                ...meta,
+                                document_type: (e.target.value || undefined) as NSEDocumentType | undefined,
+                              })
+                            }
+                          >
+                            <option value="">Infer from filename</option>
+                            {UPLOADABLE_DOC_TYPES.map((t) => (
+                              <option key={t} value={t}>
+                                {DOC_TYPE_LABEL[t]}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <p className="col-span-2 font-mono text-[9px] leading-relaxed text-moss/80">
+                          Applied to every file in this upload. Leave blank to let the server infer
+                          symbol, type and year from the filename.
+                        </p>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
               <div className="mt-4 border border-line bg-faint/60 px-3.5 py-3">
                 <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-moss">
                   Ingestion pipeline
@@ -407,48 +507,77 @@ function UploadDrawer({ open, onClose }: { open: boolean; onClose: () => void })
                   ))}
                 </ol>
                 <p className="mt-3 font-mono text-[9px] leading-relaxed text-moss/80">
-                  Documents are queryable as soon as indexing finishes. Symbol, type and fiscal
-                  period are inferred from the filing.
+                  PDF only, 50 MB max. Identical files are de-duplicated by content hash. A filing
+                  is queryable as soon as its embeddings are written to pgvector.
                 </p>
               </div>
 
               {uploading.length > 0 && (
                 <div className="mt-4 space-y-2">
                   {uploading.map((u) => (
-                    <div key={u.name} className="border border-line bg-bone px-3 py-2.5">
+                    <div
+                      key={u.name}
+                      className={`border px-3 py-2.5 ${
+                        u.error ? "border-red-300 bg-red-50/60" : "border-line bg-bone"
+                      }`}
+                    >
                       <div className="flex items-center gap-2">
-                        <Loader2 size={11} className="animate-spin text-accent" />
+                        {u.error ? (
+                          <FileWarning size={11} className="text-red-500" />
+                        ) : (
+                          <Loader2 size={11} className="animate-spin text-accent" />
+                        )}
                         <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-ink">
                           {u.name}
                         </span>
-                        <span className="tnum font-mono text-[10px] text-accent-deep">{u.pct}%</span>
+                        {!u.error && (
+                          <span className="tnum font-mono text-[10px] text-accent-deep">{u.pct}%</span>
+                        )}
                       </div>
-                      <div className="mt-2 h-1 w-full bg-line">
-                        <div className="h-full bg-accent transition-all" style={{ width: `${u.pct}%` }} />
-                      </div>
+                      {u.error ? (
+                        <p className="mt-1.5 font-mono text-[9.5px] leading-relaxed text-red-700">
+                          {u.error}
+                        </p>
+                      ) : (
+                        <>
+                          <div className="mt-2 h-1 w-full bg-line">
+                            <div
+                              className="h-full bg-accent transition-all"
+                              style={{ width: `${u.pct}%` }}
+                            />
+                          </div>
+                          {u.pct >= 100 && (
+                            <p className="mt-1.5 font-mono text-[9px] text-moss">
+                              uploaded · parsing, chunking and embedding on the server…
+                            </p>
+                          )}
+                        </>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
 
-              <div className="mt-6 border-t border-line pt-4">
-                <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-moss">
-                  No PDF at hand?
-                </p>
-                <button
-                  type="button"
-                  onClick={sample}
-                  className="mt-2 flex w-full items-center justify-between border border-ink bg-paper px-3.5 py-3 text-left transition-colors hover:bg-ink hover:text-paper"
-                >
-                  <span>
-                    <span className="block text-[13px] font-medium">Index a sample filing</span>
-                    <span className="mt-0.5 block font-mono text-[9px] opacity-60">
-                      Bajaj Finance · investor deck · 4.2 MB
+              {USE_MOCK && (
+                <div className="mt-6 border-t border-line pt-4">
+                  <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-moss">
+                    No PDF at hand?
+                  </p>
+                  <button
+                    type="button"
+                    onClick={sample}
+                    className="mt-2 flex w-full items-center justify-between border border-ink bg-paper px-3.5 py-3 text-left transition-colors hover:bg-ink hover:text-paper"
+                  >
+                    <span>
+                      <span className="block text-[13px] font-medium">Index a sample filing</span>
+                      <span className="mt-0.5 block font-mono text-[9px] opacity-60">
+                        Bajaj Finance · investor deck · 4.2 MB · simulated
+                      </span>
                     </span>
-                  </span>
-                  <FileUp size={15} />
-                </button>
-              </div>
+                    <FileUp size={15} />
+                  </button>
+                </div>
+              )}
             </div>
           </motion.aside>
         </>
@@ -465,6 +594,19 @@ function DocDetailDrawer() {
   const { libraryOpenDocId, setLibraryOpenDocId, documents, startScopedChat, uploadFiles } =
     useStore();
   const doc = documents.find((d) => d.id === libraryOpenDocId);
+  const reuploadRef = useRef<HTMLInputElement>(null);
+
+  const reupload = (files: FileList | null) => {
+    if (!doc || !files?.length) return;
+    // keep the same identity so the revision lands next to the original
+    void uploadFiles(Array.from(files), {
+      company_name: doc.metadata.company_name,
+      company_symbol: doc.metadata.nse_symbol,
+      document_type: doc.metadata.document_type,
+      financial_year: fiscalYearToWire(doc.metadata.fiscal_year),
+    });
+    setLibraryOpenDocId(null);
+  };
 
   return (
     <AnimatePresence>
@@ -615,21 +757,35 @@ function DocDetailDrawer() {
                 <MessagesSquare size={14} />
                 Query this filing
               </button>
-              <button
-                type="button"
-                onClick={() =>
-                  void uploadFiles([
-                    {
-                      name: `reindexed-${doc.filename}`,
-                      size: doc.metadata.file_size,
-                      type: "application/pdf",
-                    },
-                  ])
-                }
-                className="w-full border border-line px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-moss transition-colors hover:border-ink/40 hover:text-ink"
-              >
-                Re-upload a revision
-              </button>
+              <input
+                ref={reuploadRef}
+                type="file"
+                accept="application/pdf,.pdf"
+                className="hidden"
+                onChange={(e) => {
+                  reupload(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => reuploadRef.current?.click()}
+                  className="flex-1 border border-line px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-moss transition-colors hover:border-ink/40 hover:text-ink"
+                >
+                  Re-upload a revision
+                </button>
+                {doc.url && (
+                  <a
+                    href={doc.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-1.5 border border-line px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-moss transition-colors hover:border-ink/40 hover:text-ink"
+                  >
+                    Open PDF
+                  </a>
+                )}
+              </div>
             </div>
           </motion.aside>
         </>

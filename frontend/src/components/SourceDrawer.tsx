@@ -116,7 +116,7 @@ export default function SourceDrawer() {
                 <div className="mt-5">
                   <div className="flex items-baseline justify-between">
                     <span className="font-mono text-[9.5px] uppercase tracking-[0.18em] text-moss">
-                      Cross-encoder score
+                      Relevance score
                     </span>
                     <span className="tnum font-mono text-[11px] font-medium text-ink">
                       {src.score.toFixed(2)}

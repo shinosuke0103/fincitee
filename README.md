@@ -22,7 +22,7 @@ Upload PDFs, ask questions in plain English, and get answers that cite the exact
 
 <br/>
 
-[**Product**](#1-product) · [**How it works**](#2-how-it-works) · [**Engineering**](#3-engineering) · [**Repository structure**](#4-repository-structure) · [**Capabilities today**](#5-current-capabilities) · [**Quick start**](#6-quick-start) · [**API**](#7-api-surface) · [**Roadmap**](#9-roadmap)
+[**Product**](#1-product) · [**How it works**](#2-how-it-works) · [**Engineering**](#3-engineering) · [**Repository structure**](#4-repository-structure) · [**Capabilities**](#5-capabilities) · [**Quick start**](#6-quick-start) · [**API**](#7-api-surface) · [**Roadmap**](#9-roadmap)
 
 </div>
 
@@ -306,12 +306,14 @@ fincitee/
 │   │   ├── App.tsx                  #   shell: ticker · sidebar · views · drawers · splash
 │   │   ├── store.tsx                #   React-context store: docs, threads, streaming, health
 │   │   ├── lib/
-│   │   │   ├── api.ts               #   API client: Mock transport ⇄ Real transport (SSE)
-│   │   │   ├── types.ts             #   domain types mirroring backend schemas
-│   │   │   └── format.ts            #   labels, formatters
+│   │   │   ├── api.ts               #   API facade: live transport (fetch + SSE) · demo transport
+│   │   │   ├── backend.ts           #   wire ⇄ domain mappers, citation flattening, SSE reader
+│   │   │   ├── types.ts             #   domain types
+│   │   │   ├── format.ts            #   labels, formatters
+│   │   │   └── mockData.ts          #   seeded demo corpus + canned answers
 │   │   └── components/              #   ChatView · LibraryView · MessageItem · ResearchTrail
 │   │                                #   CiteMarkdown · SourceDrawer · Sidebar · Composer …
-│   ├── index.html · vite.config.ts · tsconfig.json · package.json
+│   ├── index.html · vite.config.ts (dev proxy, modes) · tsconfig.json · package.json
 │
 ├── LICENSE                          # MIT
 └── README.md                        # you are here
@@ -319,9 +321,9 @@ fincitee/
 
 ---
 
-## 5. Current capabilities
+## 5. Capabilities
 
-What you can do **today**, by subsystem:
+By subsystem:
 
 | Area | Capability | Status |
 |---|---|---|
@@ -344,17 +346,21 @@ What you can do **today**, by subsystem:
 | | Docker image + compose with local pgvector | ✅ |
 | | Optional Sentry, configurable CORS, structured logging | ✅ |
 | | OpenAPI / Swagger / ReDoc at `/api/docs`, `/api/redoc` | ✅ |
-| **Frontend** | Research threads, streaming answers, research trail, citation chips, source drawer | ✅ UI |
-| | Filing library: drag-and-drop upload, search, detail drawer, scoped threads | ✅ UI |
-| | Live backend transport | 🟡 UI ships against an in-browser **mock transport**; the real SSE transport is scaffolded and wiring it is the next milestone — see [`frontend/README.md`](frontend/README.md#6-connecting-to-the-real-backend) |
-| **Auth** | Multi-tenant auth / per-user libraries | ⬜ not yet |
-| **Async indexing** | Background job queue for very large PDFs | ⬜ not yet (upload is synchronous) |
+| **Frontend** | Research threads, streaming answers, live research trail, citation chips, source drawer | ✅ |
+| | Filing library: drag-and-drop upload with NSE metadata form, search, detail drawer, scoped threads | ✅ |
+| | Live transport over the backend's SSE snapshot protocol (`fetch` streaming, cancellable) with a typed adapter layer | ✅ |
+| | Threads persist across reloads — re-hydrated from the API with history, trail and citations | ✅ |
+| | Demo mode (`--mode mock`): seeded corpus + canned cited answers, no backend required | ✅ |
+| | Single-file production build (`dist/index.html`) | ✅ |
 
 ### Try it in the sandbox
 
-Three ways to exercise the backend without writing any client code:
+Four ways to exercise the system:
 
 ```bash
+# 0. The research terminal — upload a filing, ask, click a citation
+cd frontend && npm ci && npm run dev          # http://localhost:5173 (proxies /api to :8000)
+
 # 1. Swagger UI — interactive, every endpoint (use /test_message for a non-streamed answer)
 open http://localhost:8000/api/docs
 
@@ -399,18 +405,20 @@ cd backend && docker compose up --build
 
 ```bash
 cd frontend
-npm install
-npm run dev                    # http://localhost:5173 — runs against the mock transport by default
+npm ci
+npm run dev                    # http://localhost:5173 — talks to the backend on :8000 through the dev proxy
+npm run dev:mock               # no backend? the same UI on a seeded demo corpus
+npm run build                  # → dist/index.html, a single static file
 ```
 
-> On a fresh clone the frontend needs two one-line fixes before it type-checks (a missing `mockData.ts` and an unterminated comment in `types.ts`) — see [frontend/README.md § Current status](frontend/README.md#5-current-status).
-
-To point at a running backend set `VITE_API_URL=http://localhost:8000` and flip `USE_MOCK` in [`src/lib/api.ts`](frontend/src/lib/api.ts); add `http://localhost:5173` to `BACKEND_CORS_ORIGINS`. The full wiring checklist is in the [frontend README](frontend/README.md#6-connecting-to-the-real-backend).
+The dev server proxies `/api/*` to `VITE_PROXY_TARGET` (default `http://localhost:8000`), so no CORS configuration is needed locally. For a split deployment set `VITE_API_URL` at build time and add that origin to the backend's `BACKEND_CORS_ORIGINS`. Details, including how the UI maps the API's protocol, are in the [frontend README](frontend/README.md#6-the-backend-adapter).
 
 ### 6.4 Run the tests
 
 ```bash
 cd backend && uv run pytest -q      # 15 passed — no database or API key required
+cd frontend && npm run typecheck    # strict TypeScript, zero errors
+cd frontend && npm run check:adapter   # UI transport vs. a protocol stub of the API (see frontend/README.md § 6)
 ```
 
 ---
@@ -455,12 +463,12 @@ Copy [`backend/.env.example`](backend/.env.example). The important knobs:
 
 ## 9. Roadmap
 
-- [ ] **Wire the frontend to the live backend** — adapter over the SSE `Message`-snapshot protocol, citation flattening, document-shape mapping.
 - [ ] **Background indexing** — move embedding to a job queue with progress events for 300-page filings.
 - [ ] **Authentication & tenancy** — per-user libraries and threads.
 - [ ] **Hybrid retrieval + reranking** — BM25 fusion and a cross-encoder stage ahead of synthesis.
 - [ ] **In-app PDF viewer** — jump from a citation chip to the highlighted page.
-- [ ] **Richer NSE metadata** — quarterly results, concall transcripts, shareholding patterns as first-class document types.
+- [ ] **Richer NSE metadata** — quarterly results, concall transcripts, shareholding patterns as first-class document types (the UI already labels them).
+- [ ] **Conversation listing** — a server-side thread index so libraries follow the user across devices.
 - [ ] **Evaluation harness** — golden Q&A set over public filings for regression-testing answer faithfulness.
 - [ ] **Model abstraction** — swap Gemini for other providers via LlamaIndex settings.
 
@@ -472,7 +480,7 @@ Copy [`backend/.env.example`](backend/.env.example). The important knobs:
 |---|---|---|
 | **This file** | Everyone | Product, architecture, capabilities, quick start |
 | [`backend/README.md`](backend/README.md) | Backend / ML engineers | Harness internals, SSE protocol, data model, configuration, API reference, ops |
-| [`frontend/README.md`](frontend/README.md) | Frontend engineers / designers | UI anatomy, design system, state & transport layers, backend-wiring checklist |
+| [`frontend/README.md`](frontend/README.md) | Frontend engineers / designers | UI anatomy, design system, state & transport layers, the backend adapter, live vs demo mode |
 
 ---
 

@@ -190,6 +190,12 @@ async def test_upload_document_endpoint_success(
     mock_crud.create_document.assert_called_once()
     mock_ingest.assert_called_once_with(mock_db_doc, mock_get_vector_store.return_value)
 
+    # metadata recorded at upload time: size is exact, page_count is best-effort
+    created = mock_crud.create_document.call_args.args[1]
+    assert created.metadata_map["file_size"] == len(b"%PDF-1.4 mock pdf data")
+    assert created.metadata_map["page_count"] is None  # not a parsable PDF
+    assert created.metadata_map["nse_document"]["company_symbol"] == "TCS"
+
 
 @patch("app.api.endpoints.documents.crud")
 @pytest.mark.asyncio

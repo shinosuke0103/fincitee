@@ -1,12 +1,20 @@
 /**
  * Domain types
  *
+ * These are the shapes the UI renders. They are a superset of the FastAPI
+ * backend's Pydantic schemas (see backend/app/schema.py); the translation
+ * from wire format to these types lives in ./backend.ts.
+ */
 
+/** NSEDocumentTypeEnum (backend) + a few UI-only categories used by the demo corpus */
 export type NSEDocumentType =
   | "annual_report"
+  | "financial_results"
+  | "corporate_filing"
+  | "investor_presentation"
+  | "other"
   | "quarterly_results"
   | "concall_transcript"
-  | "investor_presentation"
   | "shareholding_pattern"
   | "corporate_announcement";
 
@@ -19,7 +27,7 @@ export type DocumentStatus =
   | "ready"
   | "failed";
 
-/** DocumentMetadataKeysEnum */
+/** Flattened view of metadata_map.nse_document (+ derived fields) */
 export interface DocumentMetadata {
   company_name: string;
   nse_symbol: string;
@@ -35,14 +43,32 @@ export interface DocumentMetadata {
 export interface FinDocument {
   id: string;
   filename: string;
+  /** public storage URL of the original PDF (empty in demo mode) */
+  url?: string;
   status: DocumentStatus;
   progress: number; // 0..100 for upload
   metadata: DocumentMetadata;
   uploaded_at: string;
 }
 
-/** MessageSubProcessSourceEnum */
-export type SubProcessSource = "llm" | "retrieval" | "rerank" | "parser";
+/** Optional metadata supplied at upload time (mirrors the multipart form fields) */
+export interface UploadMeta {
+  company_name?: string;
+  company_symbol?: string;
+  financial_year?: string;
+  document_type?: NSEDocumentType;
+  exchange?: string;
+}
+
+/** MessageSubProcessSourceEnum, collapsed into UI-level categories */
+export type SubProcessSource =
+  | "engine"
+  | "agent"
+  | "llm"
+  | "retrieval"
+  | "embedding"
+  | "rerank"
+  | "parser";
 
 /** MessageSubProcessStatusEnum */
 export type SubProcessStatus = "pending" | "running" | "completed" | "failed";
@@ -89,7 +115,7 @@ export interface ChatMessage {
 export interface Conversation {
   id: string;
   title: string;
-  /** document ids this conversation is scoped to; empty = all filings */
+  /** document ids this conversation is scoped to (fixed at creation on the backend) */
   document_scope: string[];
   messages: ChatMessage[];
   created_at: string;

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUpRight, Check, Layers, SlidersHorizontal } from "lucide-react";
 import { useStore } from "../store";
+import { USE_MOCK } from "../lib/api";
 import { SUGGESTIONS } from "../lib/mockData";
 import { DOC_TYPE_SHORT } from "../lib/format";
 import Composer from "./Composer";
@@ -87,8 +88,9 @@ export default function ChatView() {
         <div className="mx-auto max-w-[780px]">
           <Composer />
           <p className="mt-2 text-center font-mono text-[9px] text-moss/70">
-            Prototype data · answers are grounded mock generation · streams from GET
-            /api/conversation/{"{id}"}/message
+            {USE_MOCK
+              ? "Demo mode · seeded corpus with canned grounded answers · no backend connected"
+              : "Answers stream from GET /api/conversation/{id}/message · every figure is cited to a page of the filing"}
           </p>
         </div>
       </div>
@@ -196,18 +198,25 @@ function Hero({
 /* ------------------------------------------------------------------ */
 
 function ScopePicker() {
-  const { active, documents, setScope, streaming } = useStore();
+  const { active, documents, draftScope, setDraftScope, streaming } = useStore();
   const [open, setOpen] = useState(false);
   const ready = useMemo(() => documents.filter((d) => d.status === "ready"), [documents]);
 
-  if (!active) return null;
-  const scope = active.document_scope;
-  const all = scope.length === 0;
+  // Scope is fixed when a thread is created (the backend builds one retrieval
+  // tool per document in scope). Before the first message it is editable;
+  // afterwards the picker shows what the thread is reading from.
+  const locked = active !== null;
+  const scope = locked ? active.document_scope : draftScope;
+  const all = scope.length === 0 || (locked && scope.length === ready.length);
+  const count = all ? ready.length : scope.length;
 
   const toggle = (id: string) => {
-    const next = all ? [id] : scope.includes(id) ? scope.filter((x) => x !== id) : [...scope, id];
-    setScope(active.id, next);
+    if (locked) return;
+    const next = scope.includes(id) ? scope.filter((x) => x !== id) : [...scope, id];
+    setDraftScope(next.length === ready.length ? [] : next);
   };
+
+  if (ready.length === 0) return null;
 
   return (
     <div className="relative">
@@ -223,9 +232,7 @@ function ScopePicker() {
       >
         <SlidersHorizontal size={11} />
         <span className="hidden sm:inline">Scope</span>
-        <span className="tnum text-inherit">
-          {all ? `all ${ready.length}` : `${scope.length}`}
-        </span>
+        <span className="tnum text-inherit">{all ? `all ${count}` : `${count}`}</span>
         <Layers size={11} className={all ? "opacity-40" : "text-accent"} />
       </button>
 
@@ -241,12 +248,13 @@ function ScopePicker() {
               className="absolute right-0 z-40 mt-2 w-[300px] border border-line bg-paper shadow-[0_24px_60px_-24px_rgba(22,19,11,0.5)]"
             >
               <div className="border-b border-line px-3.5 py-2.5 font-mono text-[9px] uppercase tracking-[0.2em] text-moss">
-                Query scope · this thread
+                {locked ? "Query scope · this thread" : "Query scope · next thread"}
               </div>
               <button
                 type="button"
-                onClick={() => setScope(active.id, [])}
-                className="flex w-full items-center gap-2.5 border-b border-line/70 px-3.5 py-2.5 text-left text-[12.5px] transition-colors hover:bg-faint"
+                disabled={locked}
+                onClick={() => setDraftScope([])}
+                className="flex w-full items-center gap-2.5 border-b border-line/70 px-3.5 py-2.5 text-left text-[12.5px] transition-colors hover:bg-faint disabled:cursor-default disabled:hover:bg-transparent"
               >
                 <span
                   className={`flex h-4 w-4 items-center justify-center border ${
@@ -267,13 +275,14 @@ function ScopePicker() {
                     <button
                       key={d.id}
                       type="button"
+                      disabled={locked}
                       onClick={() => toggle(d.id)}
-                      className="flex w-full items-center gap-2.5 border-b border-line/50 px-3.5 py-2.5 text-left transition-colors last:border-0 hover:bg-faint"
+                      className="flex w-full items-center gap-2.5 border-b border-line/50 px-3.5 py-2.5 text-left transition-colors last:border-0 hover:bg-faint disabled:cursor-default disabled:hover:bg-transparent"
                     >
                       <span
                         className={`flex h-4 w-4 shrink-0 items-center justify-center border ${
                           on && !all ? "border-accent bg-accent text-paper" : "border-line bg-bone"
-                        }`}
+                        } ${locked && on ? "opacity-70" : ""}`}
                       >
                         {on && !all && <Check size={10} strokeWidth={3.2} />}
                       </span>
@@ -286,16 +295,19 @@ function ScopePicker() {
                           {DOC_TYPE_SHORT[d.metadata.document_type]} · {d.metadata.period}
                         </span>
                       </span>
-                      <span className="tnum font-mono text-[9px] text-moss">
-                        {d.metadata.pages}p
-                      </span>
+                      {d.metadata.pages > 0 && (
+                        <span className="tnum font-mono text-[9px] text-moss">
+                          {d.metadata.pages}p
+                        </span>
+                      )}
                     </button>
                   );
                 })}
               </div>
               <div className="border-t border-line bg-faint/60 px-3.5 py-2 font-mono text-[9px] leading-relaxed text-moss">
-                Unchecked mixture = whole corpus. Selecting filings narrows retrieval for this
-                thread only.
+                {locked
+                  ? "Scope is fixed per thread. Start a new thread to read from a different set of filings."
+                  : "Nothing selected = whole library. Selecting filings narrows retrieval for the thread you are about to start."}
               </div>
             </motion.div>
           </>

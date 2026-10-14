@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
+  Binary,
+  Bot,
   Brain,
   Check,
   ChevronDown,
+  Cpu,
   Database,
   FileSearch,
   ListFilter,
@@ -14,8 +17,11 @@ import {
 import type { MessageSubProcess, SubProcessSource } from "../lib/types";
 
 const SOURCE_ICON: Record<SubProcessSource, typeof Brain> = {
+  engine: Cpu,
+  agent: Bot,
   llm: Brain,
   retrieval: Database,
+  embedding: Binary,
   rerank: ListFilter,
   parser: FileSearch,
 };
